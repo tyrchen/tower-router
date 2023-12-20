@@ -240,7 +240,6 @@ impl Future for InfallibleRouteFuture {
     }
 }
 
-#[cfg(feature = "ignore")]
 #[cfg(test)]
 mod tests {
     use super::*;

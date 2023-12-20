@@ -115,19 +115,14 @@ define_rejection! {
   pub struct NestedPathRejection;
 }
 
-#[cfg(feature = "ignore")]
 #[cfg(test)]
 mod tests {
+    use crate::extract::NestedPath;
+    use crate::{routing::get, test_helpers::*, Router};
+    use axum::middleware::{from_fn, Next};
+    use axum_core::extract::Request;
     use axum_core::response::Response;
     use http::StatusCode;
-
-    use crate::{
-        extract::{NestedPath, Request},
-        middleware::{from_fn, Next},
-        routing::get,
-        test_helpers::*,
-        Router,
-    };
 
     #[crate::test]
     async fn one_level_of_nesting() {

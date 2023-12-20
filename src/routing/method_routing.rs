@@ -1219,12 +1219,12 @@ const _: () = {
     }
 };
 
-#[cfg(feature = "ignore")]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{body::Body, extract::State, handler::HandlerWithoutStateExt};
-    use axum_core::response::IntoResponse;
+    use crate::handler::HandlerWithoutStateExt;
+    use axum::extract::State;
+    use axum_core::{body::Body, response::IntoResponse};
     use http::{header::ALLOW, HeaderMap};
     use http_body_util::BodyExt;
     use std::time::Duration;
@@ -1334,7 +1334,9 @@ mod tests {
         );
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-        crate::serve(listener, app).await.unwrap();
+        axum::serve(listener, app.into_make_service())
+            .await
+            .unwrap();
     }
 
     #[crate::test]

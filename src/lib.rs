@@ -5,10 +5,15 @@ mod error_handling;
 mod extract;
 mod handler;
 mod routing;
+#[cfg(test)]
+mod test_helpers;
 mod util;
 
 pub use routing::*;
 
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
 use http_body::Body as HttpBody;
 
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+#[cfg(test)]
+use axum_macros::__private_axum_test as test;

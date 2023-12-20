@@ -45,12 +45,12 @@ opaque_future! {
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use super::*;
 
     #[test]
     fn traits() {
-        // use crate::test_helpers::*;
+        use crate::test_helpers::*;
 
-        // assert_send::<IntoMakeService<()>>();
+        assert_send::<IntoMakeService<()>>();
     }
 }

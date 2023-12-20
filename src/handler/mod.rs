@@ -364,11 +364,11 @@ where
     }
 }
 
-#[cfg(feature = "ignore")]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{extract::State, test_helpers::*};
+    use crate::test_helpers::*;
+    use axum::extract::State;
     use axum_core::body::Body;
     use http::StatusCode;
     use std::time::Duration;

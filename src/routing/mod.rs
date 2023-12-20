@@ -656,6 +656,6 @@ impl<S> fmt::Debug for Endpoint<S> {
 
 #[test]
 fn traits() {
-    // use crate::test_helpers::*;
-    // assert_send::<Router<()>>();
+    use crate::test_helpers::*;
+    assert_send::<Router<()>>();
 }

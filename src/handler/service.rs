@@ -62,7 +62,6 @@ impl<H, T, S> HandlerService<H, T, S> {
     }
 }
 
-#[cfg(feature = "ignore")]
 #[test]
 fn traits() {
     use crate::test_helpers::*;
