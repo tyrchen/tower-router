@@ -240,7 +240,7 @@ struct MyMiddleware<S> {
     inner: S,
 }
 
-impl<S> Service<Request> for MyMiddleware<S>
+impl<S> Service<Req> for MyMiddleware<S>
 where
     S: Service<Request, Response = Response> + Send + 'static,
     S::Future: Send + 'static,

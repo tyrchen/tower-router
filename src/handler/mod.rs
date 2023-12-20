@@ -94,7 +94,7 @@ pub use self::service::HandlerService;
 /// // helper to check that a value implements `Service`
 /// fn assert_service<S>(service: S)
 /// where
-///     S: Service<Request>,
+///     S: Service<Req>,
 /// {}
 /// ```
 #[doc = include_str!("../../docs/debugging_handler_type_errors.md")]
@@ -129,12 +129,13 @@ pub use self::service::HandlerService;
         note = "Consider using `#[axum::debug_handler]` to improve the error message"
     )
 )]
-pub trait Handler<T, S>: Clone + Send + Sized + 'static {
+pub trait Handler<Req, T, S>: Clone + Send + Sized + 'static {
+    type Response;
     /// The type of future calling this handler returns.
-    type Future: Future<Output = Response> + Send + 'static;
+    type Future: Future<Output = Self::Response> + Send + 'static;
 
     /// Call the handler with the given request.
-    fn call(self, req: Request, state: S) -> Self::Future;
+    fn call(self, req: Req, state: S) -> Self::Future;
 
     /// Apply a [`tower::Layer`] to the handler.
     ///
@@ -173,7 +174,7 @@ pub trait Handler<T, S>: Clone + Send + Sized + 'static {
     fn layer<L>(self, layer: L) -> Layered<L, Self, T, S>
     where
         L: Layer<HandlerService<Self, T, S>> + Clone,
-        L::Service: Service<Request>,
+        L::Service: Service<Req>,
     {
         Layered {
             layer,
@@ -188,16 +189,18 @@ pub trait Handler<T, S>: Clone + Send + Sized + 'static {
     }
 }
 
-impl<F, Fut, Res, S> Handler<((),), S> for F
+impl<Req, Res, F, Fut, S> Handler<Req, ((),), S> for F
 where
     F: FnOnce() -> Fut + Clone + Send + 'static,
     Fut: Future<Output = Res> + Send,
-    Res: IntoResponse,
+    Req: Send + Sync + 'static,
+    Res: Send + Sync + 'static,
 {
-    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+    type Response = Res;
+    type Future = Pin<Box<dyn Future<Output = Res> + Send>>;
 
-    fn call(self, _req: Request, _state: S) -> Self::Future {
-        Box::pin(async move { self().await.into_response() })
+    fn call(self, _req: Req, _state: S) -> Self::Future {
+        Box::pin(async move { self().await })
     }
 }
 
@@ -206,16 +209,18 @@ macro_rules! impl_handler {
         [$($ty:ident),*], $last:ident
     ) => {
         #[allow(non_snake_case, unused_mut)]
-        impl<F, Fut, S, Res, M, $($ty,)* $last> Handler<(M, $($ty,)* $last,), S> for F
+        impl<F, Fut, S, M, $($ty,)* $last> Handler<Request, (M, $($ty,)* $last,), S> for F
         where
             F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + 'static,
-            Fut: Future<Output = Res> + Send,
+            Fut: Future<Output = Response> + Send,
             S: Send + Sync + 'static,
-            Res: IntoResponse,
+
             $( $ty: FromRequestParts<S> + Send, )*
             $last: FromRequest<S, M> + Send,
+
         {
-            type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+            type Response = Response;
+            type Future = Pin<Box<dyn Future<Output = Self::Response> + Send>>;
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
@@ -253,16 +258,16 @@ mod private {
     pub enum IntoResponseHandler {}
 }
 
-impl<T, S> Handler<private::IntoResponseHandler, S> for T
-where
-    T: IntoResponse + Clone + Send + 'static,
-{
-    type Future = std::future::Ready<Response>;
+// impl<T, S> Handler<private::IntoResponseHandler, S> for T
+// where
+//     T: IntoResponse + Clone + Send + 'static,
+// {
+//     type Future = std::future::Ready<Response>;
 
-    fn call(self, _req: Request, _state: S) -> Self::Future {
-        std::future::ready(self.into_response())
-    }
-}
+//     fn call(self, _req: Request, _state: S) -> Self::Future {
+//         std::future::ready(self.into_response())
+//     }
+// }
 
 /// A [`Service`] created from a [`Handler`] by applying a Tower middleware.
 ///
@@ -298,19 +303,19 @@ where
     }
 }
 
-impl<H, S, T, L> Handler<T, S> for Layered<L, H, T, S>
+impl<Req, H, S, T, L> Handler<Req, T, S> for Layered<L, H, T, S>
 where
     L: Layer<HandlerService<H, T, S>> + Clone + Send + 'static,
-    H: Handler<T, S>,
-    L::Service: Service<Request, Error = Infallible> + Clone + Send + 'static,
-    <L::Service as Service<Request>>::Response: IntoResponse,
-    <L::Service as Service<Request>>::Future: Send,
+    H: Handler<Req, T, S>,
+    L::Service: Service<Req, Error = Infallible> + Clone + Send + 'static,
+    <L::Service as Service<Req>>::Future: Send,
     T: 'static,
     S: 'static,
 {
-    type Future = future::LayeredFuture<L::Service>;
+    type Response = <L::Service as Service<Req>>::Response;
+    type Future = future::LayeredFuture<Req, Self::Response, L::Service>;
 
-    fn call(self, req: Request, state: S) -> Self::Future {
+    fn call(self, req: Req, state: S) -> Self::Future {
         use futures_util::future::{FutureExt, Map};
 
         let svc = self.handler.with_state(state);
@@ -320,10 +325,7 @@ where
         let future: Map<
             _,
             fn(
-                Result<
-                    <L::Service as Service<Request>>::Response,
-                    <L::Service as Service<Request>>::Error,
-                >,
+                Result<<L::Service as Service<Req>>::Response, <L::Service as Service<Req>>::Error>,
             ) -> _,
         > = svc.oneshot(req).map(|result| match result {
             Ok(res) => res.into_response(),
@@ -339,7 +341,7 @@ where
 /// This provides convenience methods to convert the [`Handler`] into a [`Service`] or [`MakeService`].
 ///
 /// [`MakeService`]: tower::make::MakeService
-pub trait HandlerWithoutStateExt<T>: Handler<T, ()> {
+pub trait HandlerWithoutStateExt<Req, T>: Handler<Req, T, ()> {
     /// Convert the handler into a [`Service`] and no state.
     fn into_service(self) -> HandlerService<Self, T, ()>;
 
@@ -351,9 +353,9 @@ pub trait HandlerWithoutStateExt<T>: Handler<T, ()> {
     fn into_make_service(self) -> IntoMakeService<HandlerService<Self, T, ()>>;
 }
 
-impl<H, T> HandlerWithoutStateExt<T> for H
+impl<Req, H, T> HandlerWithoutStateExt<Req, T> for H
 where
-    H: Handler<T, ()>,
+    H: Handler<Req, T, ()>,
 {
     fn into_service(self) -> HandlerService<Self, T, ()> {
         self.with_state(())

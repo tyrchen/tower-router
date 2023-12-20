@@ -53,14 +53,14 @@ pub(crate) struct RouteId(u32);
 
 /// The router type for composing handlers and services.
 #[must_use]
-pub struct Router<S = ()> {
-    path_router: PathRouter<S, false>,
-    fallback_router: PathRouter<S, true>,
+pub struct Router<Req, Res, S = ()> {
+    path_router: PathRouter<Req, Res, S, false>,
+    fallback_router: PathRouter<Req, Res, S, true>,
     default_fallback: bool,
-    catch_all_fallback: Fallback<S>,
+    catch_all_fallback: Fallback<Req, Res, S>,
 }
 
-impl<S> Clone for Router<S> {
+impl<Req, Res, S> Clone for Router<Req, Res, S> {
     fn clone(&self) -> Self {
         Self {
             path_router: self.path_router.clone(),
@@ -71,7 +71,7 @@ impl<S> Clone for Router<S> {
     }
 }
 
-impl<S> Default for Router<S>
+impl<Req, Res, S> Default for Router<Req, Res, S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -80,7 +80,7 @@ where
     }
 }
 
-impl<S> fmt::Debug for Router<S> {
+impl<Req, Res, S> fmt::Debug for Router<Req, Res, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Router")
             .field("path_router", &self.path_router)
@@ -97,7 +97,7 @@ pub(crate) const NEST_TAIL_PARAM_CAPTURE: &str = "/*__private__tower_router_nest
 pub(crate) const FALLBACK_PARAM: &str = "__private__tower_router_fallback";
 pub(crate) const FALLBACK_PARAM_PATH: &str = "/*__private__tower_router_fallback";
 
-impl<S> Router<S>
+impl<Req, Res, S> Router<Req, Res, S>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -116,7 +116,7 @@ where
 
     #[doc = include_str!("../../docs/routing/route.md")]
     #[track_caller]
-    pub fn route(mut self, path: &str, method_router: MethodRouter<S>) -> Self {
+    pub fn route(mut self, path: &str, method_router: MethodRouter<Req, Res, S>) -> Self {
         panic_on_err!(self.path_router.route(path, method_router));
         self
     }
@@ -144,7 +144,7 @@ where
 
     #[doc = include_str!("../../docs/routing/nest.md")]
     #[track_caller]
-    pub fn nest(mut self, path: &str, router: Router<S>) -> Self {
+    pub fn nest(mut self, path: &str, router: Router<Req, Res, S>) -> Self {
         let Router {
             path_router,
             fallback_router,
@@ -180,7 +180,7 @@ where
     #[track_caller]
     pub fn merge<R>(mut self, other: R) -> Self
     where
-        R: Into<Router<S>>,
+        R: Into<Router<Req, Res, S>>,
     {
         const PANIC_MSG: &str =
             "Failed to merge fallbacks. This is a bug in axum. Please file an issue";
@@ -226,13 +226,13 @@ where
     }
 
     #[doc = include_str!("../../docs/routing/layer.md")]
-    pub fn layer<L>(self, layer: L) -> Router<S>
+    pub fn layer<L>(self, layer: L) -> Router<Req, Res, S>
     where
-        L: Layer<Route> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
     {
         Router {
             path_router: self.path_router.layer(layer.clone()),
@@ -246,11 +246,11 @@ where
     #[track_caller]
     pub fn route_layer<L>(self, layer: L) -> Self
     where
-        L: Layer<Route> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
     {
         Router {
             path_router: self.path_router.route_layer(layer),
@@ -264,7 +264,7 @@ where
     #[doc = include_str!("../../docs/routing/fallback.md")]
     pub fn fallback<H, T>(mut self, handler: H) -> Self
     where
-        H: Handler<T, S>,
+        H: Handler<Req, T, S>,
         T: 'static,
     {
         self.catch_all_fallback =
@@ -286,14 +286,14 @@ where
         self.fallback_endpoint(Endpoint::Route(route))
     }
 
-    fn fallback_endpoint(mut self, endpoint: Endpoint<S>) -> Self {
+    fn fallback_endpoint(mut self, endpoint: Endpoint<Req, Res, S>) -> Self {
         self.fallback_router.set_fallback(endpoint);
         self.default_fallback = false;
         self
     }
 
     #[doc = include_str!("../../docs/routing/with_state.md")]
-    pub fn with_state<S2>(self, state: S) -> Router<S2> {
+    pub fn with_state<S2>(self, state: S) -> Router<Req, Res, S2> {
         Router {
             path_router: self.path_router.with_state(state.clone()),
             fallback_router: self.fallback_router.with_state(state.clone()),
@@ -302,7 +302,11 @@ where
         }
     }
 
-    pub(crate) fn call_with_state(&mut self, req: Request, state: S) -> RouteFuture<Infallible> {
+    pub(crate) fn call_with_state(
+        &mut self,
+        req: Request,
+        state: S,
+    ) -> RouteFuture<Req, Res, Infallible> {
         let (req, state) = match self.path_router.call_with_state(req, state) {
             Ok(future) => return future,
             Err((req, state)) => (req, state),
@@ -370,10 +374,7 @@ where
     /// This is mainly used when calling `Router` in tests. It shouldn't be necessary when running
     /// the `Router` normally via [`Router::into_make_service`].
     pub fn as_service<B>(&mut self) -> RouterAsService<'_, B, S> {
-        RouterAsService {
-            router: self,
-            _marker: PhantomData,
-        }
+        RouterAsService { router: self }
     }
 
     /// Convert the router into an owned [`Service`] with a fixed request body type, to aid type
@@ -382,14 +383,11 @@ where
     /// This is the same as [`Router::as_service`] instead it returns an owned [`Service`]. See
     /// that method for more details.
     pub fn into_service<B>(self) -> RouterIntoService<B, S> {
-        RouterIntoService {
-            router: self,
-            _marker: PhantomData,
-        }
+        RouterIntoService { router: self }
     }
 }
 
-impl Router {
+impl<Req, Res> Router<Req, Res> {
     /// Convert this router into a [`MakeService`], that is a [`Service`] whose
     /// response is another service.
     ///
@@ -435,14 +433,10 @@ const _: () = {
     }
 };
 
-impl<B> Service<Request<B>> for Router<()>
-where
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
-    B::Error: Into<axum_core::BoxError>,
-{
+impl<Req, Res> Service<Req> for Router<Req, Res, ()> {
     type Response = Response;
     type Error = Infallible;
-    type Future = RouteFuture<Infallible>;
+    type Future = RouteFuture<Req, Res, Infallible>;
 
     #[inline]
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -450,8 +444,8 @@ where
     }
 
     #[inline]
-    fn call(&mut self, req: Request<B>) -> Self::Future {
-        let req = req.map(Body::new);
+    fn call(&mut self, req: Req) -> Self::Future {
+        // let req = req.map(Body::new);
         self.call_with_state(req, ())
     }
 }
@@ -459,32 +453,27 @@ where
 /// A [`Router`] converted into a borrowed [`Service`] with a fixed body type.
 ///
 /// See [`Router::as_service`] for more details.
-pub struct RouterAsService<'a, B, S = ()> {
-    router: &'a mut Router<S>,
-    _marker: PhantomData<B>,
+pub struct RouterAsService<'a, Req, Res, S = ()> {
+    router: &'a mut Router<Req, Res, S>,
 }
 
-impl<'a, B> Service<Request<B>> for RouterAsService<'a, B, ()>
-where
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
-    B::Error: Into<axum_core::BoxError>,
-{
+impl<'a, Req, Res> Service<Req> for RouterAsService<'a, Req, Res, ()> {
     type Response = Response;
     type Error = Infallible;
-    type Future = RouteFuture<Infallible>;
+    type Future = RouteFuture<Req, Res, Infallible>;
 
     #[inline]
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        <Router as Service<Request<B>>>::poll_ready(self.router, cx)
+        <Router as Service<Req>>::poll_ready(self.router, cx)
     }
 
     #[inline]
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, req: Req) -> Self::Future {
         self.router.call(req)
     }
 }
 
-impl<'a, B, S> fmt::Debug for RouterAsService<'a, B, S>
+impl<'a, Req, Res, S> fmt::Debug for RouterAsService<'a, Req, Res, S>
 where
     S: fmt::Debug,
 {
@@ -498,27 +487,22 @@ where
 /// A [`Router`] converted into an owned [`Service`] with a fixed body type.
 ///
 /// See [`Router::into_service`] for more details.
-pub struct RouterIntoService<B, S = ()> {
-    router: Router<S>,
-    _marker: PhantomData<B>,
+pub struct RouterIntoService<Req, Res, S = ()> {
+    router: Router<Req, Res, S>,
 }
 
-impl<B> Service<Request<B>> for RouterIntoService<B, ()>
-where
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
-    B::Error: Into<axum_core::BoxError>,
-{
+impl<Req, Res> Service<Req> for RouterIntoService<Req, Res, ()> {
     type Response = Response;
     type Error = Infallible;
-    type Future = RouteFuture<Infallible>;
+    type Future = RouteFuture<Req, Res, Infallible>;
 
     #[inline]
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        <Router as Service<Request<B>>>::poll_ready(&mut self.router, cx)
+        <Router as Service<Req>>::poll_ready(&mut self.router, cx)
     }
 
     #[inline]
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, req: Req) -> Self::Future {
         self.router.call(req)
     }
 }
@@ -534,13 +518,13 @@ where
     }
 }
 
-enum Fallback<S, E = Infallible> {
-    Default(Route<E>),
-    Service(Route<E>),
-    BoxedHandler(BoxedIntoRoute<S, E>),
+enum Fallback<Req, Res, S, E = Infallible> {
+    Default(Route<Req, Res, E>),
+    Service(Route<Req, Res, E>),
+    BoxedHandler(BoxedIntoRoute<Req, Res, S, E>),
 }
 
-impl<S, E> Fallback<S, E>
+impl<Req, Res, S, E> Fallback<Req, Res, S, E>
 where
     S: Clone,
 {
@@ -552,11 +536,11 @@ where
         }
     }
 
-    fn map<F, E2>(self, f: F) -> Fallback<S, E2>
+    fn map<F, E2>(self, f: F) -> Fallback<Req, Res, S, E2>
     where
         S: 'static,
         E: 'static,
-        F: FnOnce(Route<E>) -> Route<E2> + Clone + Send + 'static,
+        F: FnOnce(Route<Req, Res, E>) -> Route<Req, Res, E2> + Clone + Send + 'static,
         E2: 'static,
     {
         match self {
@@ -566,7 +550,7 @@ where
         }
     }
 
-    fn with_state<S2>(self, state: S) -> Fallback<S2, E> {
+    fn with_state<S2>(self, state: S) -> Fallback<Req, Res, S2, E> {
         match self {
             Fallback::Default(route) => Fallback::Default(route),
             Fallback::Service(route) => Fallback::Service(route),
@@ -574,7 +558,7 @@ where
         }
     }
 
-    fn call_with_state(&mut self, req: Request, state: S) -> RouteFuture<E> {
+    fn call_with_state(&mut self, req: Request, state: S) -> RouteFuture<Req, Res, E> {
         match self {
             Fallback::Default(route) | Fallback::Service(route) => {
                 RouteFuture::from_future(route.oneshot_inner(req))
@@ -587,7 +571,7 @@ where
     }
 }
 
-impl<S, E> Clone for Fallback<S, E> {
+impl<Req, Res, S, E> Clone for Fallback<Req, Res, S, E> {
     fn clone(&self) -> Self {
         match self {
             Self::Default(inner) => Self::Default(inner.clone()),
@@ -597,7 +581,7 @@ impl<S, E> Clone for Fallback<S, E> {
     }
 }
 
-impl<S, E> fmt::Debug for Fallback<S, E> {
+impl<Req, Res, S, E> fmt::Debug for Fallback<Req, Res, S, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Default(inner) => f.debug_tuple("Default").field(inner).finish(),
@@ -608,22 +592,22 @@ impl<S, E> fmt::Debug for Fallback<S, E> {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum Endpoint<S> {
-    MethodRouter(MethodRouter<S>),
-    Route(Route),
+enum Endpoint<Req, Res, S> {
+    MethodRouter(MethodRouter<Req, Res, S>),
+    Route(Route<Req, Res>),
 }
 
-impl<S> Endpoint<S>
+impl<Req, Res, S> Endpoint<Req, Res, S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    fn layer<L>(self, layer: L) -> Endpoint<S>
+    fn layer<L>(self, layer: L) -> Endpoint<Req, Res, S>
     where
-        L: Layer<Route> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
     {
         match self {
             Endpoint::MethodRouter(method_router) => {
@@ -634,7 +618,7 @@ where
     }
 }
 
-impl<S> Clone for Endpoint<S> {
+impl<Req, Res, S> Clone for Endpoint<Req, Res, S> {
     fn clone(&self) -> Self {
         match self {
             Self::MethodRouter(inner) => Self::MethodRouter(inner.clone()),
@@ -643,7 +627,7 @@ impl<S> Clone for Endpoint<S> {
     }
 }
 
-impl<S> fmt::Debug for Endpoint<S> {
+impl<Req, Res, S> fmt::Debug for Endpoint<Req, Res, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MethodRouter(method_router) => {

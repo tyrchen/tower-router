@@ -11,13 +11,13 @@ use super::{
     MethodRouter, Route, RouteId, FALLBACK_PARAM_PATH, NEST_TAIL_PARAM,
 };
 
-pub(super) struct PathRouter<S, const IS_FALLBACK: bool> {
-    routes: HashMap<RouteId, Endpoint<S>>,
+pub(super) struct PathRouter<Req, Res, S, const IS_FALLBACK: bool> {
+    routes: HashMap<RouteId, Endpoint<Req, Res, S>>,
     node: Arc<Node>,
     prev_route_id: RouteId,
 }
 
-impl<S> PathRouter<S, true>
+impl<Req, Res, S> PathRouter<Req, Res, S, true>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -27,20 +27,20 @@ where
         this
     }
 
-    pub(super) fn set_fallback(&mut self, endpoint: Endpoint<S>) {
+    pub(super) fn set_fallback(&mut self, endpoint: Endpoint<Req, Res, S>) {
         self.replace_endpoint("/", endpoint.clone());
         self.replace_endpoint(FALLBACK_PARAM_PATH, endpoint);
     }
 }
 
-impl<S, const IS_FALLBACK: bool> PathRouter<S, IS_FALLBACK>
+impl<Req, Res, S, const IS_FALLBACK: bool> PathRouter<Req, Res, S, IS_FALLBACK>
 where
     S: Clone + Send + Sync + 'static,
 {
     pub(super) fn route(
         &mut self,
         path: &str,
-        method_router: MethodRouter<S>,
+        method_router: MethodRouter<Req, Res, S>,
     ) -> Result<(), Cow<'static, str>> {
         fn validate_path(path: &str) -> Result<(), &'static str> {
             if path.is_empty() {
@@ -96,7 +96,7 @@ where
     pub(super) fn route_endpoint(
         &mut self,
         path: &str,
-        endpoint: Endpoint<S>,
+        endpoint: Endpoint<Req, Res, S>,
     ) -> Result<(), Cow<'static, str>> {
         if path.is_empty() {
             return Err("Paths must start with a `/`. Use \"/\" for root routes".into());
@@ -123,7 +123,7 @@ where
 
     pub(super) fn merge(
         &mut self,
-        other: PathRouter<S, IS_FALLBACK>,
+        other: PathRouter<Req, Res, S, IS_FALLBACK>,
     ) -> Result<(), Cow<'static, str>> {
         let PathRouter {
             routes,
@@ -164,7 +164,7 @@ where
     pub(super) fn nest(
         &mut self,
         path_to_nest_at: &str,
-        router: PathRouter<S, IS_FALLBACK>,
+        router: PathRouter<Req, Res, S, IS_FALLBACK>,
     ) -> Result<(), Cow<'static, str>> {
         let prefix = validate_nest_path(path_to_nest_at);
 
@@ -238,13 +238,13 @@ where
         Ok(())
     }
 
-    pub(super) fn layer<L>(self, layer: L) -> PathRouter<S, IS_FALLBACK>
+    pub(super) fn layer<L>(self, layer: L) -> PathRouter<Req, Res, S, IS_FALLBACK>
     where
-        L: Layer<Route> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
     {
         let routes = self
             .routes
@@ -265,11 +265,11 @@ where
     #[track_caller]
     pub(super) fn route_layer<L>(self, layer: L) -> Self
     where
-        L: Layer<Route> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
     {
         if self.routes.is_empty() {
             panic!(
@@ -294,7 +294,7 @@ where
         }
     }
 
-    pub(super) fn with_state<S2>(self, state: S) -> PathRouter<S2, IS_FALLBACK> {
+    pub(super) fn with_state<S2>(self, state: S) -> PathRouter<Req, Res, S2, IS_FALLBACK> {
         let routes = self
             .routes
             .into_iter()
@@ -318,9 +318,9 @@ where
 
     pub(super) fn call_with_state(
         &mut self,
-        mut req: Request,
+        mut req: Req,
         state: S,
-    ) -> Result<RouteFuture<Infallible>, (Request, S)> {
+    ) -> Result<RouteFuture<Req, Res, Infallible>, (Req, S)> {
         #[cfg(feature = "original-uri")]
         {
             use crate::extract::OriginalUri;
@@ -370,7 +370,7 @@ where
         }
     }
 
-    pub(super) fn replace_endpoint(&mut self, path: &str, endpoint: Endpoint<S>) {
+    pub(super) fn replace_endpoint(&mut self, path: &str, endpoint: Endpoint<Req, Res, S>) {
         match self.node.at(path) {
             Ok(match_) => {
                 let id = *match_.value;
@@ -393,7 +393,7 @@ where
     }
 }
 
-impl<S, const IS_FALLBACK: bool> Default for PathRouter<S, IS_FALLBACK> {
+impl<Req, Res, S, const IS_FALLBACK: bool> Default for PathRouter<Req, Res, S, IS_FALLBACK> {
     fn default() -> Self {
         Self {
             routes: Default::default(),
@@ -403,7 +403,7 @@ impl<S, const IS_FALLBACK: bool> Default for PathRouter<S, IS_FALLBACK> {
     }
 }
 
-impl<S, const IS_FALLBACK: bool> fmt::Debug for PathRouter<S, IS_FALLBACK> {
+impl<Req, Res, S, const IS_FALLBACK: bool> fmt::Debug for PathRouter<Req, Res, S, IS_FALLBACK> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PathRouter")
             .field("routes", &self.routes)
@@ -412,7 +412,7 @@ impl<S, const IS_FALLBACK: bool> fmt::Debug for PathRouter<S, IS_FALLBACK> {
     }
 }
 
-impl<S, const IS_FALLBACK: bool> Clone for PathRouter<S, IS_FALLBACK> {
+impl<Req, Res, S, const IS_FALLBACK: bool> Clone for PathRouter<Req, Res, S, IS_FALLBACK> {
     fn clone(&self) -> Self {
         Self {
             routes: self.routes.clone(),

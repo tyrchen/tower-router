@@ -7,44 +7,44 @@ use std::{convert::Infallible, future::Future, pin::Pin, task::Context};
 use tower::util::Oneshot;
 use tower_service::Service;
 
-type MapFuture<F> = Map<F, fn(Response) -> Result<Response, Infallible>>;
+type MapFuture<Res, F> = Map<F, fn(Res) -> Result<Res, Infallible>>;
 opaque_future! {
     /// The response future for [`IntoService`](super::IntoService).
-    pub type IntoServiceFuture<F> = MapFuture<F>;
+    pub type IntoServiceFuture<Res, F> = MapFuture<Res, F>;
 }
 
-type MapInner<S> = Map<
-    Oneshot<S, Request>,
-    fn(Result<<S as Service<Request>>::Response, <S as Service<Request>>::Error>) -> Response,
+type MapInner<Req, Res, S> = Map<
+    Oneshot<S, Req>,
+    fn(Result<<S as Service<Req>>::Response, <S as Service<Req>>::Error>) -> Res,
 >;
 pin_project! {
     /// The response future for [`Layered`](super::Layered).
-    pub struct LayeredFuture<S>
+    pub struct LayeredFuture<Req, Res, S>
     where
-        S: Service<Request>,
+        S: Service<Req>,
     {
         #[pin]
-        inner: MapInner<S>,
+        inner: MapInner<Req, Res, S>,
     }
 }
 
-impl<S> LayeredFuture<S>
+impl<Req, Res, S> LayeredFuture<Req, Res, S>
 where
-    S: Service<Request>,
+    S: Service<Req>,
 {
     #[allow(clippy::type_complexity)]
     pub(super) fn new(
-        inner: Map<Oneshot<S, Request>, fn(Result<S::Response, S::Error>) -> Response>,
+        inner: Map<Oneshot<S, Req>, fn(Result<S::Response, S::Error>) -> Res>,
     ) -> Self {
         Self { inner }
     }
 }
 
-impl<S> Future for LayeredFuture<S>
+impl<Req, Res, S> Future for LayeredFuture<Req, Res, S>
 where
-    S: Service<Request>,
+    S: Service<Req>,
 {
-    type Output = Response;
+    type Output = Res;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<Self::Output> {

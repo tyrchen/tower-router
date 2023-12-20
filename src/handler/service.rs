@@ -99,16 +99,14 @@ where
     }
 }
 
-impl<H, T, S, B> Service<Request<B>> for HandlerService<H, T, S>
+impl<Req, H, T, S> Service<Req> for HandlerService<H, T, S>
 where
-    H: Handler<T, S> + Clone + Send + 'static,
-    B: HttpBody<Data = Bytes> + Send + 'static,
-    B::Error: Into<BoxError>,
+    H: Handler<Req, T, S> + Clone + Send + 'static,
     S: Clone + Send + Sync,
 {
-    type Response = Response;
+    type Response = H::Response;
     type Error = Infallible;
-    type Future = super::future::IntoServiceFuture<H::Future>;
+    type Future = super::future::IntoServiceFuture<Self::Response, H::Future>;
 
     #[inline]
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -118,10 +116,10 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, req: Req) -> Self::Future {
         use futures_util::future::FutureExt;
 
-        let req = req.map(Body::new);
+        // let req = req.map(Body::new);
 
         let handler = self.handler.clone();
         let future = Handler::call(handler, req, self.state.clone());

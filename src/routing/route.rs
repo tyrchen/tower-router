@@ -28,9 +28,9 @@ use tower_service::Service;
 ///
 /// You normally shouldn't need to care about this type. It's used in
 /// [`Router::layer`](super::Router::layer).
-pub struct Route<E = Infallible>(BoxCloneService<Request, Response, E>);
+pub struct Route<Req, Res, E = Infallible>(BoxCloneService<Req, Res, E>);
 
-impl<E> Route<E> {
+impl<Req, Res, E> Route<Req, Res, E> {
     pub(crate) fn new<T>(svc: T) -> Self
     where
         T: Service<Request, Error = E> + Clone + Send + 'static,
@@ -42,24 +42,21 @@ impl<E> Route<E> {
         ))
     }
 
-    pub(crate) fn oneshot_inner(
-        &mut self,
-        req: Request,
-    ) -> Oneshot<BoxCloneService<Request, Response, E>, Request> {
+    pub(crate) fn oneshot_inner(&mut self, req: Req) -> Oneshot<BoxCloneService<Req, Res, E>, Req> {
         self.0.clone().oneshot(req)
     }
 
-    pub(crate) fn layer<L, NewError>(self, layer: L) -> Route<NewError>
+    pub(crate) fn layer<L, NewError>(self, layer: L) -> Route<Req, Res, NewError>
     where
-        L: Layer<Route<E>> + Clone + Send + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
-        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
-        <L::Service as Service<Request>>::Error: Into<NewError> + 'static,
-        <L::Service as Service<Request>>::Future: Send + 'static,
+        L: Layer<Route<Req, Res, E>> + Clone + Send + 'static,
+        L::Service: Service<Req> + Clone + Send + 'static,
+        <L::Service as Service<Req>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Req>>::Error: Into<NewError> + 'static,
+        <L::Service as Service<Req>>::Future: Send + 'static,
         NewError: 'static,
     {
         let layer = (
-            MapRequestLayer::new(|req: Request<_>| req.map(Body::new)),
+            MapRequestLayer::new(|req: Req| req.map(Body::new)),
             MapErrLayer::new(Into::into),
             MapResponseLayer::new(IntoResponse::into_response),
             layer,
@@ -69,26 +66,22 @@ impl<E> Route<E> {
     }
 }
 
-impl<E> Clone for Route<E> {
+impl<Req, Res, E> Clone for Route<Req, Res, E> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<E> fmt::Debug for Route<E> {
+impl<Req, Res, E> fmt::Debug for Route<Req, Res, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Route").finish()
     }
 }
 
-impl<B, E> Service<Request<B>> for Route<E>
-where
-    B: HttpBody<Data = bytes::Bytes> + Send + 'static,
-    B::Error: Into<axum_core::BoxError>,
-{
-    type Response = Response;
+impl<Req, Res, E> Service<Req> for Route<Req, Res, E> {
+    type Response = Req;
     type Error = E;
-    type Future = RouteFuture<E>;
+    type Future = RouteFuture<Req, Res, E>;
 
     #[inline]
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -96,17 +89,16 @@ where
     }
 
     #[inline]
-    fn call(&mut self, req: Request<B>) -> Self::Future {
-        let req = req.map(Body::new);
+    fn call(&mut self, req: Req) -> Self::Future {
         RouteFuture::from_future(self.oneshot_inner(req))
     }
 }
 
 pin_project! {
     /// Response future for [`Route`].
-    pub struct RouteFuture<E> {
+    pub struct RouteFuture<Req, Res, E> {
         #[pin]
-        kind: RouteFutureKind<E>,
+        kind: RouteFutureKind<Req, Res, E>,
         strip_body: bool,
         allow_header: Option<Bytes>,
     }
@@ -114,24 +106,22 @@ pin_project! {
 
 pin_project! {
     #[project = RouteFutureKindProj]
-    enum RouteFutureKind<E> {
+    enum RouteFutureKind<Req, Res, E> {
         Future {
             #[pin]
             future: Oneshot<
-                BoxCloneService<Request, Response, E>,
-                Request,
+                BoxCloneService<Req, Res, E>,
+                Req,
             >,
         },
         Response {
-            response: Option<Response>,
+            response: Option<Res>,
         }
     }
 }
 
-impl<E> RouteFuture<E> {
-    pub(crate) fn from_future(
-        future: Oneshot<BoxCloneService<Request, Response, E>, Request>,
-    ) -> Self {
+impl<Req, Res, E> RouteFuture<Req, Res, E> {
+    pub(crate) fn from_future(future: Oneshot<BoxCloneService<Req, Res, E>, Req>) -> Self {
         Self {
             kind: RouteFutureKind::Future { future },
             strip_body: false,
@@ -150,8 +140,8 @@ impl<E> RouteFuture<E> {
     }
 }
 
-impl<E> Future for RouteFuture<E> {
-    type Output = Result<Response, E>;
+impl<Req, Res, E> Future for RouteFuture<Req, Res, E> {
+    type Output = Result<Res, E>;
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -217,19 +207,19 @@ fn set_content_length(size_hint: http_body::SizeHint, headers: &mut HeaderMap) {
 
 pin_project! {
     /// A [`RouteFuture`] that always yields a [`Response`].
-    pub struct InfallibleRouteFuture {
+    pub struct InfallibleRouteFuture<Req, Res> {
         #[pin]
-        future: RouteFuture<Infallible>,
+        future: RouteFuture<Req, Res, Infallible>,
     }
 }
 
-impl InfallibleRouteFuture {
-    pub(crate) fn new(future: RouteFuture<Infallible>) -> Self {
+impl<Req, Res> InfallibleRouteFuture<Req, Res> {
+    pub(crate) fn new(future: RouteFuture<Req, Res, Infallible>) -> Self {
         Self { future }
     }
 }
 
-impl Future for InfallibleRouteFuture {
+impl<Req, Res> Future for InfallibleRouteFuture<Req, Res> {
     type Output = Response;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
